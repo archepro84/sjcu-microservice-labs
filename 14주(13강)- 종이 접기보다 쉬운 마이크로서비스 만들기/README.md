@@ -270,45 +270,48 @@ http PUT :8082/rentals/2/cancel
 
 앞서 CB 는 시스템을 안정되게 운영할 수 있게 해줬지만 사용자의 요청을 100% 받아들여주지 못했기 때문에 이에 대한 보완책으로 자동화된 확장 기능을 적용하고자 한다.
 
-- 결제서비스에 대한 replica 를 동적으로 늘려주도록 HPA 를 설정한다. 설정은 CPU 사용량이 15프로를 넘어서면 replica 를 10개까지 늘려준다:
+- 대여(Rental)서비스에 대한 replica 를 동적으로 늘려주도록 HPA 를 설정한다. 설정은 CPU 사용량이 50프로를 넘어서면 replicasets 을 최대 5개까지 늘려준다.
 
 ```
-kubectl autoscale deploy pay --min=1 --max=10 --cpu-percent=15
+kubectl autoscale deployment rental --min=1 --max=5 --cpu-percent=50
 ```
 
 - CB 에서 했던 방식대로 워크로드를 2분 동안 걸어준다.
 
 ```
-siege -c100 -t120S -r10 --content-type "application/json" 'http://localhost:8081/orders POST {"item": "chicken"}'
+siege -c100 -t60S -r10 --content-type "application/json" 'http://rental:8082/rentals POST {"customerId":1,"rentalShopId":1,"stockId"=1,"rentalStatus":"Started","qty":1,"startedAt":"2023-06-09","endedAt":"2023-06-10"}'
 ```
 
 - 오토스케일이 어떻게 되고 있는지 모니터링을 걸어둔다:
 
 ```
-kubectl get deploy pay -w
+kubectl get deploy rental -w
 ```
 
 - 어느정도 시간이 흐른 후 (약 30초) 스케일 아웃이 벌어지는 것을 확인할 수 있다:
 
 ```
-NAME    DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
-pay     1         1         1            1           17s
-pay     1         2         1            1           45s
-pay     1         4         1            1           1m
-:
+NAME     READY   UP-TO-DATE   AVAILABLE   AGE
+rental   2/2     2            2           12m
+rental   5/5     5            5           14m
 ```
 
 - siege 의 로그를 보아도 전체적인 성공률이 높아진 것을 확인 할 수 있다.
 
 ```
-Transactions:		        5078 hits
-Availability:		       92.45 %
-Elapsed time:		       120 secs
-Data transferred:	        0.34 MB
-Response time:		        5.60 secs
-Transaction rate:	       17.15 trans/sec
-Throughput:		        0.01 MB/sec
-Concurrency:		       96.02
+Transactions:                  60875 hits
+Availability:                 93.70 %
+Elapsed time:                  59.06 secs
+Data transferred:              3.96 MB
+Response time:                  0.10 secs
+Transaction rate:            1030.73 trans/sec
+Throughput:                     0.58 MB/sec
+Concurrency:                   99.63
+Successful transactions:           0
+Failed transactions:               0
+Longest transaction:            0.76
+Shortest transaction:           0.00
+
 ```
 
 ## 무정지 재배포
@@ -318,61 +321,94 @@ Concurrency:		       96.02
 - seige 로 배포작업 직전에 워크로드를 모니터링 함.
 
 ```
-siege -c1 -t600S -r10 --content-type "application/json" 'http://localhost:8081/orders POST {"item": "chicken"}'
-
-** SIEGE 4.0.5
-** Preparing 100 concurrent users for battle.
+root@siege:/# siege -c1 -t120S -v http://rental:8082/rentals --delay=1S
+** SIEGE 4.0.4
+** Preparing 1 concurrent users for battle.
 The server is now under siege...
+HTTP/1.1 200     0.01 secs:     306 bytes ==> GET  /rentals
+HTTP/1.1 200     0.01 secs:     306 bytes ==> GET  /rentals
+HTTP/1.1 200     0.01 secs:     306 bytes ==> GET  /rentals
+HTTP/1.1 200     0.01 secs:     306 bytes ==> GET  /rentals
+HTTP/1.1 200     0.01 secs:     306 bytes ==> GET  /rentals
+HTTP/1.1 200     0.01 secs:     306 bytes ==> GET  /rentals
 
-HTTP/1.1 201     0.68 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.68 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.70 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.70 secs:     207 bytes ==> POST http://localhost:8081/orders
-:
 
 ```
 
 - 새버전으로의 배포 시작
 
 ```
-kubectl set image ...
+kubectl apply -f deployment.yaml
+```
+
+- 배포 중 siege 의 상태를 확인
+
+```
+
+HTTP/1.1 200     0.05 secs:     306 bytes ==> GET  /rentals
+HTTP/1.1 200     0.03 secs:     306 bytes ==> GET  /rentals
+HTTP/1.1 200     0.04 secs:     306 bytes ==> GET  /rentals
+[error] socket: unable to connect sock.c:249: Connection refused
+[error] socket: unable to connect sock.c:249: Connection refused
+[error] socket: unable to connect sock.c:249: Connection refused
+[error] socket: unable to connect sock.c:249: Connection refused
+[error] socket: unable to connect sock.c:249: Connection refused
+
 ```
 
 - seige 의 화면으로 넘어가서 Availability 가 100% 미만으로 떨어졌는지 확인
 
 ```
-Transactions:		        3078 hits
-Availability:		       70.45 %
-Elapsed time:		       120 secs
-Data transferred:	        0.34 MB
-Response time:		        5.60 secs
-Transaction rate:	       17.15 trans/sec
-Throughput:		        0.01 MB/sec
-Concurrency:		       96.02
+Lifting the server siege...
+Transactions:                    193 hits
+Availability:                  82.48 %
+Elapsed time:                 119.41 secs
+Data transferred:               0.06 MB
+Response time:                  0.03 secs
+Transaction rate:               1.62 trans/sec
+Throughput:                     0.00 MB/sec
+Concurrency:                    0.05
+Successful transactions:         193
+Failed transactions:              41
+Longest transaction:            0.86
+Shortest transaction:           0.00
 
 ```
 
-배포기간중 Availability 가 평소 100%에서 70% 대로 떨어지는 것을 확인. 원인은 쿠버네티스가 성급하게 새로 올려진 서비스를 READY 상태로 인식하여 서비스 유입을 진행한 것이기 때문. 이를 막기위해
-Readiness Probe 를 설정함:
+배포기간중 Availability 가 평소 100%에서 80% 대로 떨어지는 것을 확인. 원인은 쿠버네티스가 성급하게 새로 올려진 서비스를 READY 상태로 인식하여 서비스 유입을 진행한 것이기 때문. 이를 막기위해
+ReadinessProbe 를 설정함
 
 ```
-# deployment.yaml 의 readiness probe 의 설정:
+# deployment.yaml 의 ReadinessProbe 의 설정
+#  readinessProbe:
+#    httpGet:
+#      path: '/'
+#      port: 8080
+#    initialDelaySeconds: 10
+#    timeoutSeconds: 2
+#    periodSeconds: 5
+#    failureThreshold: 10
 
+kubectl apply -f deployment.yaml
 
-kubectl apply -f kubernetes/deployment.yaml
 ```
 
-- 동일한 시나리오로 재배포 한 후 Availability 확인:
+- 동일한 시나리오로 재배포 한 후 Availability 확인
 
 ```
-Transactions:		        3078 hits
-Availability:		       100 %
-Elapsed time:		       120 secs
-Data transferred:	        0.34 MB
-Response time:		        5.60 secs
-Transaction rate:	       17.15 trans/sec
-Throughput:		        0.01 MB/sec
-Concurrency:		       96.02
+Lifting the server siege...
+Transactions:                    224 hits
+Availability:                 100.00 %
+Elapsed time:                 119.66 secs
+Data transferred:               0.07 MB
+Response time:                  0.02 secs
+Transaction rate:               1.87 trans/sec
+Throughput:                     0.00 MB/sec
+Concurrency:                    0.05
+Successful transactions:         224
+Failed transactions:               0
+Longest transaction:            0.53
+Shortest transaction:           0.00
 
 ```
 
