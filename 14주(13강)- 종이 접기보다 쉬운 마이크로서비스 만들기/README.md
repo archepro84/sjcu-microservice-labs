@@ -82,7 +82,7 @@
 
 ## Event Storming 결과
 
-![스크린샷 2023-06-09 오후 1 53 39](https://github.com/acmexii/sjcu-microservice-labs/assets/49636918/2e52a63f-8e98-4651-86e4-c3cfa50cced1)
+![스크린샷 2023-06-09 오후 8 00 56](https://github.com/acmexii/sjcu-microservice-labs/assets/49636918/a5e936cf-9f0f-4dd4-a1e0-a1977d719b63)
 
 # 구현:
 
