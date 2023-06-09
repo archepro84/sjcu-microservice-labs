@@ -84,48 +84,57 @@
 
 ![스크린샷 2023-06-09 오후 1 53 39](https://github.com/acmexii/sjcu-microservice-labs/assets/49636918/2e52a63f-8e98-4651-86e4-c3cfa50cced1)
 
-
 # 구현:
 
-분석/설계 단계에서 도출된 헥사고날 아키텍처에 따라, 각 BC별로 대변되는 마이크로 서비스들을 스프링부트와 파이선으로 구현하였다. 구현한 각 서비스를 로컬에서 실행하는 방법은 아래와 같다 (각자의 포트넘버는
-8081 ~ 808n 이다)
+분석/설계 단계에서 도출된 헥사고날 아키텍처에 따라, 각 BC별로 대변되는 마이크로 서비스들을 스프링부트로 구현하였다. 구현한 각 서비스를 로컬에서 실행하는 방법은 아래와 같다.
 
 ```
-cd app
+cd Rental
 mvn spring-boot:run
 
-cd pay
+cd Payment
 mvn spring-boot:run 
 
-cd store
+cd RentalShop
 mvn spring-boot:run  
 
-cd customer
-python policy-handler.py 
+cd Notification
+mvn spring-boot:run
+
+cd Stock
+mvn spring-boot:run
 ```
+
+각 마이크로 서비스들의 포트 번호는 아래와 같다.
+
+- **Rental**: 8082
+- **Payment**: 8083
+- **RentalShop**: 8085
+- **Notification**: 8088
+- **Stock**: 8092
 
 ## DDD 의 적용
 
-- 각 서비스내에 도출된 핵심 Aggregate Root 객체를 Entity 로 선언하였다: (예시는 pay 마이크로 서비스). 이때 가능한 현업에서 사용하는 언어 (유비쿼터스 랭귀지)를 그대로 사용하려고 노력했다.
-  하지만, 일부 구현에 있어서 영문이 아닌 경우는 실행이 불가능한 경우가 있기 때문에 계속 사용할 방법은 아닌것 같다. (Maven pom.xml, Kafka의 topic id, FeignClient 의 서비스
-  id 등은 한글로 식별자를 사용하는 경우 오류가 발생하는 것을 확인하였다)
+- 각 서비스내에 도출된 핵심 Aggregate Root 객체를 Entity 로 선언하였다: (예시는 Payment 마이크로 서비스).
+  이때 가능한 현업에서 사용하는 언어 (유비쿼터스 랭귀지)를 그대로 사용하려고 노력했다.
 
 ```
-package fooddelivery;
+package rentalshop.domain;
 
 import javax.persistence.*;
-import org.springframework.beans.BeanUtils;
-import java.util.List;
+import lombok.Data;
 
 @Entity
-@Table(name="결제이력_table")
-public class 결제이력 {
+@Table(name = "Payment_table")
+@Data
+public class Payment {
 
     @Id
-    @GeneratedValue(strategy=GenerationType.AUTO)
+    @GeneratedValue(strategy = GenerationType.AUTO)
     private Long id;
-    private String orderId;
-    private Double 금액;
+    private Long rentalId;
+    private Integer price;
+
 
     public Long getId() {
         return id;
@@ -134,21 +143,24 @@ public class 결제이력 {
     public void setId(Long id) {
         this.id = id;
     }
-    public String getOrderId() {
-        return orderId;
+
+    public Long getRentalId() {
+        return rentalId;
     }
 
-    public void setOrderId(String orderId) {
-        this.orderId = orderId;
-    }
-    public Double get금액() {
-        return 금액;
-    }
- 
-    public void set금액(Double 금액) {
-        this.금액 = 금액;
+    public void setRentalId(Long rentalId) {
+        this.rentalId = rentalId;
     }
 
+
+    public Integer getPrice() {
+        return price;
+    }
+
+    public void setPrice(Integer price) {
+        this.price = price;
+    }
+    
 }
 
 ```
@@ -157,53 +169,54 @@ public class 결제이력 {
   위하여 Spring Data REST 의 RestRepository 를 적용하였다
 
 ```
-package fooddelivery;
+package rentalshop.domain;
 
 import org.springframework.data.repository.PagingAndSortingRepository;
 
-public interface 결제이력Repository extends PagingAndSortingRepository<결제이력, Long>{
-}
 ```
 
 - 적용 후 REST API 의 테스트
 
 ```
-# app 서비스의 주문처리
-http localhost:8081/orders item="통닭"
+# Rental 서비스의 대여처리
+http POST :8082/rentals customerId=1 rentalShopId=1 stockId=1 rentalStatus="Started" qty=1 startedAt="2023-06-09" endedAt="2023-06-10" 
 
-# store 서비스의 배달처리
-http localhost:8083/주문처리s orderId=1
+# RentalShop의 고객 대여 Accept
+http PUT :8085/rentalShops/1/accept
 
-# 주문 상태 확인
-http localhost:8081/orders/1
+# RentalShop의 Stock 등록
+http POST :8092/stocks rentalShopId=1 carName="320D" carType="SUB" qty=3 price=230000
 
-```
-
-## 비동기식 호출 / 시간적 디커플링 / 장애격리 / 최종 (Eventual) 일관성 테스트
-
-결제가 이루어진 후에 상점시스템으로 이를 알려주는 행위는 동기식이 아니라 비 동기식으로 처리하여 상점 시스템의 처리를 위하여 결제주문이 블로킹 되지 않아도록 처리한다.
-
-- 이를 위하여 결제이력에 기록을 남긴 후에 곧바로 결제승인이 되었다는 도메인 이벤트를 카프카로 송출한다(Publish)
+# 고객의 결제 시도
+http POST :8085/payments rentalId=1 price=230000
 
 ```
-package fooddelivery;
+
+## 비동기식 호출 / 시간적 디커플링 / 장애격리(Fault Isolation) / 최종 (Eventual) 일관성 테스트
+
+고객의 대여 신청이 이루어지고, 대여 신청 여부를 대여점에 알려주는 행위를 동기식(Synchronized)이 아닌 비 동기식(ASynchronized)으로 처리하여,
+대여 신청이 블로킹 되지 않도록 처리한다.
+
+- 이를 위하여 고객이 대여를 신청하였을 때, 도메인 이벤트를 카프카로 송출(Publish)한다.
+
+```
+package rentalshop.domain;
 
 @Entity
-@Table(name="결제이력_table")
-public class 결제이력 {
+@Table(name = "Rental_table")
+@Data
+public class Rental {
 
- ...
     @PrePersist
     public void onPrePersist(){
-        결제승인됨 결제승인됨 = new 결제승인됨();
-        BeanUtils.copyProperties(this, 결제승인됨);
-        결제승인됨.publish();
+        CarRented carRented = new CarRented(this);
+        carRented.publishAfterCommit();
     }
 
 }
 ```
 
-- 상점 서비스에서는 결제승인 이벤트에 대해서 이를 수신하여 자신의 정책을 처리하도록 PolicyHandler 를 구현한다:
+- 대여점에서는 고객이 대여를 신청하였다는 도메인 이벤트를 카프카로 수신(Subscribe)한다.
 
 ```
 package fooddelivery;
@@ -211,59 +224,44 @@ package fooddelivery;
 ...
 
 @Service
+@Transactional
 public class PolicyHandler{
 
-    @StreamListener(KafkaProcessor.INPUT)
-    public void whenever결제승인됨_주문정보받음(@Payload 결제승인됨 결제승인됨){
+    @StreamListener(
+        value = KafkaProcessor.INPUT,
+        condition = "headers['type']=='CarRented'"
+    )
+    public void wheneverCarRented_CreateRental(@Payload CarRented carRented) {
+        CarRented event = carRented;
+        System.out.println(
+            "\n\n##### listener CreateRental : " + carRented + "\n\n"
+        );
 
-        if(결제승인됨.isMe()){
-            System.out.println("##### listener 주문정보받음 : " + 결제승인됨.toJson());
-            // 주문 정보를 받았으니, 요리를 슬슬 시작해야지..
-            
-        }
+        // Sample Logic //
+        RentalShop.createRental(event);
     }
 
 }
 
 ```
 
-실제 구현을 하자면, 카톡 등으로 점주는 노티를 받고, 요리를 마친후, 주문 상태를 UI에 입력할테니, 우선 주문정보를 DB에 받아놓은 후, 이후 처리는 해당 Aggregate 내에서 하면 되겠다.:
-
-```
-  @Autowired 주문관리Repository 주문관리Repository;
-  
-  @StreamListener(KafkaProcessor.INPUT)
-  public void whenever결제승인됨_주문정보받음(@Payload 결제승인됨 결제승인됨){
-
-      if(결제승인됨.isMe()){
-          카톡전송(" 주문이 왔어요! : " + 결제승인됨.toString(), 주문.getStoreId());
-
-          주문관리 주문 = new 주문관리();
-          주문.setId(결제승인됨.getOrderId());
-          주문관리Repository.save(주문);
-      }
-  }
+대여점 시스템은 결제(Payment) 마이크로서비스와 분리되어 있고, 이벤트 수신에 따라 처리되기 때문에,
+결제 시스템이 오류가 발생한 상태더라도, 고객의 차량 반납, 렌탈 취소와 같은 행위는 문제가 발생하지 않는다.
 
 ```
 
-상점 시스템은 주문/결제와 완전히 분리되어있으며, 이벤트 수신에 따라 처리되기 때문에, 상점시스템이 유지보수로 인해 잠시 내려간 상태라도 주문을 받는데 문제가 없다:
+# 1. Rental 서비스의 대여처리
+http POST :8082/rentals customerId=1 rentalShopId=1 stockId=1 rentalStatus="Started" qty=1 startedAt="2023-06-09" endedAt="2023-06-10"
+http POST :8082/rentals customerId=1 rentalShopId=1 stockId=2 rentalStatus="Started" qty=1 startedAt="2023-06-09" endedAt="2023-06-10"
 
-```
-# 상점 서비스 (store) 를 잠시 내려놓음 (ctrl+c)
+# 2. 결제 서비스 (Payment)를 종료 (ctrl+c)
 
-#주문처리
-http localhost:8081/orders item=통닭 storeId=1   #Success
-http localhost:8081/orders item=피자 storeId=2   #Success
+# 3. RentalShop의 고객 대여 Accept
+http PUT :8085/rentalShops/1/accept
 
-#주문상태 확인
-http localhost:8080/orders     # 주문상태 안바뀜 확인
+# 4. 고객의 대여 취소
+http PUT :8082/rentals/2/cancel
 
-#상점 서비스 기동
-cd 상점
-mvn spring-boot:run
-
-#주문상태 확인
-http localhost:8080/orders     # 모든 주문의 상태가 "배송됨"으로 확인
 ```
 
 # 운영
